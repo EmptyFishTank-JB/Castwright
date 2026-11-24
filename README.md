@@ -6,7 +6,9 @@ story aloud.
 
 ## Use it
 
-Open `castwright.html` in Chrome or Edge, then drop in a `.md` file (or click **Load sample story**).
+Live page: https://emptyfishtank-jb.github.io/Castwright/
+
+Open the live page (see below) or `index.html` in Chrome or Edge, then drop in a `.md` file (or click **Load sample story**).
 No install, no build, no accounts. Everything runs in the browser with its built-in speech voices.
 
 ## Story format
@@ -46,10 +48,11 @@ git checkout v0.1.0      # then open the files; `git checkout main` returns to t
 | v0.1.0 | Audio capture test: can a page hear a browser tab playing Audible? (It could not.) |
 | v0.2.0 | Blob pet prototype: a morphing blob with a visualizer mouth, Gemini scene casting, text-to-speech and a per-character voice picker. |
 | v1.0.0 | Castwright: load a `.md` story and have each character read in their own adjustable voice. |
+| v1.0.1 | The app is now `index.html`, so the GitHub Pages link opens it directly. |
 
 ## Layout
 
-- `castwright.html` is the app.
+- `index.html` is the app.
 - `samples/` holds example stories.
 - `prototypes/` holds earlier experiments (audio capture test, blob character).
 
