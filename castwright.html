@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Castwright</title>
+<style>
+  :root { --bg:#0b0f1a; --panel:#141a2b; --text:#e6ebf5; --muted:#8b95ad; --accent:#60a5fa; --line:#26304a; --bad:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 system-ui,sans-serif; padding:16px; }
+  main { max-width:900px; margin:0 auto; }
+  h1 { font-size:1.5rem; margin:0; letter-spacing:.02em; }
+  h2 { font-size:1rem; margin:0 0 10px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+  .tag { color:var(--muted); margin:0 0 16px; }
+  section { background:var(--panel); border-radius:14px; padding:16px; margin:14px 0; }
+  button { background:#26304a; color:var(--text); border:0; border-radius:999px; padding:8px 14px; font-size:.95rem; cursor:pointer; }
+  button.primary { background:var(--accent); color:#06101f; font-weight:700; }
+  button:disabled { opacity:.4; cursor:default; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  #drop { border:2px dashed var(--line); border-radius:12px; padding:22px; text-align:center; color:var(--muted); cursor:pointer; }
+  #drop.over { border-color:var(--accent); color:var(--text); }
+  textarea { width:100%; min-height:120px; background:#0a0e18; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; margin-top:8px; }
+  select, input[type=range] { min-width:0; }
+  select { background:#0a0e18; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 8px; font:inherit; width:100%; }
+  .cast { display:grid; gap:12px; }
+  .char { border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .char .top { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .dot { width:12px; height:12px; border-radius:50%; flex:none; }
+  .cname { font-weight:700; }
+  .count { color:var(--muted); font-size:.85rem; margin-right:auto; }
+  .sliders { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:6px 14px; margin-top:8px; }
+  .sliders label { font-size:.8rem; color:var(--muted); display:block; }
+  .sliders input { width:100%; }
+  #bar { position:sticky; top:0; z-index:5; background:var(--bg); padding:8px 0; }
+  #script { max-height:60vh; overflow:auto; }
+  .seg { padding:6px 10px; border-radius:8px; cursor:pointer; border-left:4px solid transparent; }
+  .seg:hover { background:#1b2440; }
+  .seg.now { background:#1d2a4d; }
+  .seg .who { font-size:.75rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
+  .seg.head { font-weight:700; font-size:1.1rem; margin-top:10px; }
+  #msg { color:var(--muted); font-size:.9rem; min-height:1.3em; margin-top:8px; }
+  #msg.err { color:var(--bad); }
+  details summary { cursor:pointer; color:var(--muted); }
+  code { background:#0a0e18; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Castwright</h1>
+  <p class="tag">Give every character in a story their own voice. <span style="opacity:.6">v1.0.0</span></p>
+
+  <section>
+    <h2>Story</h2>
+    <div id="drop">Drop a <code>.md</code> file here, or click to choose one<input id="file" type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden></div>
+    <div class="row" style="margin-top:10px">
+      <button id="sampleBtn">Load sample story</button>
+      <button id="pasteBtn">Paste text instead</button>
+    </div>
+    <div id="pasteBox" hidden>
+      <textarea id="paste" placeholder="**Mira:** Hello there."></textarea>
+      <button class="primary" id="pasteGo" style="margin-top:8px">Use this text</button>
+    </div>
+    <details style="margin-top:10px">
+      <summary>How should the story be written?</summary>
+      <p>Put the speaker's name at the start of each line, followed by a colon: <code>**Mira:** Hello there.</code>
+      Bold is recommended, but <code>Mira: Hello there.</code> also works once a name appears at least twice (or is written in ALL CAPS).
+      Anything without a speaker is read by the <b>Narrator</b>. <code>#</code> headings are read by the Narrator too.
+      Add a note in brackets, like <code>**Tobb (quietly):**</code>; it is removed from the spoken text.</p>
+    </details>
+    <div id="msg"></div>
+  </section>
+
+  <section id="castSec" hidden>
+    <h2>Dramatis Personae</h2>
+    <div id="cast" class="cast"></div>
+    <div class="row" style="margin-top:12px">
+      <button id="saveCast">Save cast settings (.json)</button>
+      <button id="loadCast">Load cast settings</button>
+      <input id="castFile" type="file" accept=".json,application/json" hidden>
+      <button id="resetCast">Reset to defaults</button>
+    </div>
+  </section>
+
+  <section id="playSec" hidden>
+    <h2>Performance</h2>
+    <div id="bar" class="row">
+      <button class="primary" id="playBtn">&#9654; Play</button>
+      <button id="prevBtn">&#9664;&#9664; Prev</button>
+      <button id="nextBtn">Next &#9654;&#9654;</button>
+      <button id="stopBtn">&#9632; Stop</button>
+      <label style="margin-left:auto;color:var(--muted);font-size:.85rem">Speed
+        <input id="speed" type="range" min="0.6" max="1.6" step="0.05" value="1" style="vertical-align:middle;width:110px">
+        <span id="speedV">1.00x</span></label>
+    </div>
+    <div id="script"></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const synth = window.speechSynthesis;
+const SAMPLE = `# Chapter 1: The Docking Permit
+
+The airlock hissed open and Captain Vex stepped onto the dock, scanning the crowd.
+
+**Captain Vex:** You're late.
+
+**Mira:** The station's been scrambling your docking permit for an hour.
+
+Mira looked up from her console and grinned.
+
+**Tobb:** Permits are the least of your worries, Captain. Someone has been asking about your cargo.
+
+**Captain Vex:** Who?
+
+**Tobb (quietly):** Nobody I'd trust.
+
+A soft chime sounded across the dock.
+
+**Station AI:** Warning. Unregistered vessel approaching dock four.
+
+# Chapter 2: Contact
+
+Vex turned toward the viewport and smiled. Whatever was coming, she had been waiting for it.
+
+**Captain Vex:** Mira, open a channel.
+
+**Mira:** Channel open. They're not answering.
+`;
+
+/* ============ parsing ============ */
+const stripMd = s => s
+  .replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+  .replace(/(\*\*|__)(.*?)\1/g, '$2').replace(/(\*|_)(.*?)\1/g, '$2').replace(/`([^`]*)`/g, '$1').trim();
+const unquote = s => s.replace(/^["“](.*)["”]$/, '$1');
+const titleCase = s => s.toLowerCase().replace(/\b[a-z]/g, c => c.toUpperCase());
+const NARRATOR_KEYS = new Set(['narrator', 'narration']);
+
+function parse(md) {
+  const raw = []; let fence = false, comment = false;
+  for (let line of md.replace(/\r/g, '').split('\n')) {
+    if (/^\s*```/.test(line)) { fence = !fence; continue; }
+    if (fence) continue;
+    if (comment) { if (/-->/.test(line)) comment = false; continue; }
+    if (/^\s*<!--/.test(line)) { if (!/-->/.test(line)) comment = true; continue; }
+    line = line.trim();
+    if (!line || /^([-*_]\s*){3,}$/.test(line)) continue;
+    const h = line.match(/^#{1,6}\s+(.*)$/);
+    if (h) { raw.push({ heading: true, text: stripMd(h[1]) }); continue; }
+    line = line.replace(/^>\s*/, '').replace(/^[-+]\s+/, '').replace(/^\*\s+/, '');
+    let cand = null;
+    const m = line.match(/^(\*\*|__)?\s*([^:*_]{1,40}?)\s*(\*\*|__)?\s*:\s*(\*\*|__)?\s*(\S.*)$/);
+    if (m) {
+      const name = m[2].replace(/\s*\([^)]*\)\s*$/, '').trim();
+      if (name && /^[A-Za-z]/.test(name) && name.split(/\s+/).length <= 4 && !/[.!?,;]$/.test(name) && !m[5].startsWith('//'))
+        cand = { name, bold: !!(m[1] || m[3] || m[4]), text: m[5] };
+    }
+    raw.push({ line, cand });
+  }
+  // decide which "Name:" prefixes are really speakers
+  const boldKeys = new Set(), counts = {};
+  raw.forEach(r => { if (r.cand) { const k = r.cand.name.toLowerCase(); if (r.cand.bold) boldKeys.add(k); counts[k] = (counts[k] || 0) + 1; } });
+  const isSpeaker = c => { const k = c.name.toLowerCase(); return boldKeys.has(k) || NARRATOR_KEYS.has(k) || counts[k] >= 2 || (/^[A-Z0-9 .'’-]+$/.test(c.name) && /[A-Z]/.test(c.name)); };
+  const display = {}; const segs = [];
+  raw.forEach(r => {
+    if (r.heading) { if (r.text) segs.push({ speaker: 'Narrator', text: r.text, heading: true }); return; }
+    let speaker = 'Narrator', text = r.line;
+    if (r.cand && isSpeaker(r.cand)) {
+      const k = r.cand.name.toLowerCase();
+      if (!NARRATOR_KEYS.has(k)) {
+        display[k] = display[k] || (/[a-z]/.test(r.cand.name) ? r.cand.name : titleCase(r.cand.name));
+        speaker = display[k];
+      }
+      text = r.cand.text;
+    }
+    text = unquote(stripMd(text));
+    if (text) segs.push({ speaker, text });
+  });
+  return segs;
+}
+
+/* ============ cast & voices ============ */
+let segs = [], chars = [];                 // chars: [{name,count,color}]
+let saved = {}; try { saved = JSON.parse(localStorage.getItem('castwrightCast') || '{}'); } catch (e) {}
+let voices = [];
+const vKey = v => v.voiceURI || v.name;
+const vRank = v => /natural|neural|premium|enhanced/i.test(v.name) ? 0 : (v.localService ? 2 : 1);
+const vLabel = v => `${v.name}${/natural|neural/i.test(v.name) ? '' : v.localService ? '' : ' (online)'} [${v.lang}]`;
+const hashStr = s => { let h = 0; for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h; };
+const colorOf = n => n === 'Narrator' ? '#cbd5e1' : `hsl(${hashStr(n) % 360} 70% 66%)`;
+
+function loadVoices() {
+  const all = synth ? synth.getVoices() : [];
+  const en = all.filter(v => /^en/i.test(v.lang));
+  voices = (en.length ? en : all).slice().sort((a, b) => vRank(a) - vRank(b) || a.name.localeCompare(b.name));
+  if (chars.length) renderCast();
+}
+if (synth) { loadVoices(); synth.onvoiceschanged = loadVoices; }
+
+function defaults(name) {
+  const h = hashStr(name);
+  return name === 'Narrator' ? { pitch: 1, rate: 1, volume: 1 }
+    : { pitch: +(0.75 + (h % 11) * 0.065).toFixed(2), rate: +(0.95 + ((h >> 4) % 6) * 0.03).toFixed(2), volume: 1 };
+}
+// stable default voice per name (hash into the sorted list, avoiding voices already taken)
+function assignVoices() {
+  const map = {}, used = new Set();
+  if (!voices.length) return map;
+  chars.forEach(c => { const p = voices.find(v => vKey(v) === (saved[c.name] || {}).voice); if (p) { map[c.name] = p; used.add(vKey(p)); } });
+  chars.filter(c => !map[c.name]).map(c => c.name).sort().forEach(n => {
+    let i = hashStr(n) % voices.length, t = 0;
+    while (used.has(vKey(voices[i])) && t++ < voices.length) i = (i + 1) % voices.length;
+    map[n] = voices[i]; used.add(vKey(voices[i]));
+  });
+  return map;
+}
+let voiceMap = {};
+const cfg = name => ({ ...defaults(name), ...(saved[name] || {}) });
+
+function persist() { try { localStorage.setItem('castwrightCast', JSON.stringify(saved)); } catch (e) {} }
+function pinAll() {   // freeze every current setting so changing one character never shuffles the others
+  chars.forEach(c => { const v = voiceMap[c.name]; saved[c.name] = { ...cfg(c.name), voice: v ? vKey(v) : null }; });
+}
+
+function renderCast() {
+  voiceMap = assignVoices();
+  const box = $('cast'); box.innerHTML = '';
+  chars.forEach(c => {
+    const s = cfg(c.name), el = document.createElement('div'); el.className = 'char';
+    el.innerHTML = `<div class="top"><span class="dot" style="background:${c.color}"></span><span class="cname" style="color:${c.color}"></span><span class="count">${c.count} line${c.count === 1 ? '' : 's'}</span><button class="test">Test</button></div>
+      <select></select>
+      <div class="sliders">
+        <label>Pitch <b class="pv"></b><input class="pitch" type="range" min="0.5" max="1.8" step="0.05"></label>
+        <label>Rate <b class="rv"></b><input class="rate" type="range" min="0.6" max="1.5" step="0.05"></label>
+        <label>Volume <b class="vv"></b><input class="vol" type="range" min="0.2" max="1" step="0.05"></label>
+      </div>`;
+    el.querySelector('.cname').textContent = c.name;
+    const sel = el.querySelector('select');
+    if (!voices.length) { sel.innerHTML = '<option>No voices available</option>'; sel.disabled = true; }
+    voices.forEach(v => { const o = document.createElement('option'); o.value = vKey(v); o.textContent = vLabel(v); sel.appendChild(o); });
+    if (voiceMap[c.name]) sel.value = vKey(voiceMap[c.name]);
+    const bind = (cls, outCls, key, fmt) => {
+      const inp = el.querySelector(cls), out = el.querySelector(outCls);
+      inp.value = s[key]; out.textContent = fmt(s[key]);
+      inp.oninput = () => { out.textContent = fmt(+inp.value); pinAll(); saved[c.name][key] = +inp.value; persist(); };
+    };
+    bind('.pitch', '.pv', 'pitch', v => (+v).toFixed(2)); bind('.rate', '.rv', 'rate', v => (+v).toFixed(2) + 'x'); bind('.vol', '.vv', 'volume', v => Math.round(v * 100) + '%');
+    sel.onchange = () => { pinAll(); saved[c.name].voice = sel.value; persist(); voiceMap = assignVoices(); };
+    el.querySelector('.test').onclick = () => { stop(); testVoice(c.name); };
+    box.appendChild(el);
+  });
+}
+
+/* ============ speech engine ============ */
+let cur = 0, playing = false, token = 0;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const speed = () => +$('speed').value;
+
+function chunks(text) {   // sentence-sized pieces; long utterances get cut off by some browsers
+  const parts = text.match(/[^.!?…]+[.!?…]*["”')\]]*\s*/g) || [text], out = []; let buf = '';
+  parts.forEach(p => { if ((buf + p).length > 220 && buf) { out.push(buf.trim()); buf = p; } else buf += p; });
+  if (buf.trim()) out.push(buf.trim());
+  return out;
+}
+function say(name, text, tok) {
+  return new Promise(resolve => {
+    if (tok !== token) return resolve();
+    const s = cfg(name), u = new SpeechSynthesisUtterance(text);
+    if (voiceMap[name]) u.voice = voiceMap[name];
+    u.pitch = s.pitch; u.rate = Math.min(2, s.rate * speed()); u.volume = s.volume;
+    let done = false; const fin = () => { if (!done) { done = true; clearTimeout(g); resolve(); } };
+    u.onend = fin; u.onerror = fin;
+    const g = setTimeout(() => { synth.cancel(); fin(); }, text.length * 160 + 6000);   // never hang on a stalled voice
+    synth.speak(u);
+  });
+}
+async function speakText(name, text, tok) { for (const c of chunks(text)) { if (tok !== token) return; await say(name, c, tok); } }
+function testVoice(name) { const tok = ++token; speakText(name, `Hi, I'm ${name}. This is how I sound.`, tok); }
+
+function setNow(i) {
+  document.querySelectorAll('.seg.now').forEach(e => e.classList.remove('now'));
+  const el = document.querySelector(`.seg[data-i="${i}"]`);
+  if (el) { el.classList.add('now'); el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+}
+function setPlaying(p) { playing = p; $('playBtn').textContent = p ? '⏸ Pause' : '▶ Play'; }
+
+async function run(from) {
+  if (!synth) return msg('This browser has no speech synthesis.', true);
+  const tok = ++token; synth.cancel(); setPlaying(true);
+  for (let i = from; i < segs.length; i++) {
+    if (tok !== token) return;
+    cur = i; setNow(i);
+    await speakText(segs[i].speaker, segs[i].text, tok);
+    if (tok !== token) return;
+    await sleep(segs[i].heading ? 600 : 250);
+  }
+  if (tok === token) { setPlaying(false); cur = 0; setNow(-1); }
+}
+function stop() { token++; if (synth) synth.cancel(); setPlaying(false); }
+$('playBtn').onclick = () => playing ? stop() : run(cur);          // pause keeps your place; play resumes the current segment
+$('stopBtn').onclick = () => { stop(); cur = 0; setNow(-1); };
+$('prevBtn').onclick = () => { cur = Math.max(0, cur - 1); setNow(cur); if (playing) run(cur); };
+$('nextBtn').onclick = () => { cur = Math.min(segs.length - 1, cur + 1); setNow(cur); if (playing) run(cur); };
+$('speed').oninput = () => { $('speedV').textContent = speed().toFixed(2) + 'x'; };
+
+/* ============ loading a story ============ */
+function msg(t, err) { $('msg').textContent = t; $('msg').className = err ? 'err' : ''; }
+function loadStory(text, label) {
+  stop(); cur = 0;
+  segs = parse(text);
+  if (!segs.length) { $('castSec').hidden = $('playSec').hidden = true; return msg('Nothing to read in that file.', true); }
+  const counts = {}; segs.forEach(s => counts[s.speaker] = (counts[s.speaker] || 0) + 1);
+  chars = Object.keys(counts).sort((a, b) => a === 'Narrator' ? -1 : b === 'Narrator' ? 1 : counts[b] - counts[a])
+    .map(n => ({ name: n, count: counts[n], color: colorOf(n) }));
+  if (!counts.Narrator) chars.unshift({ name: 'Narrator', count: 0, color: colorOf('Narrator') });
+  const sc = $('script'); sc.innerHTML = '';
+  segs.forEach((s, i) => {
+    const d = document.createElement('div'); d.className = 'seg' + (s.heading ? ' head' : ''); d.dataset.i = i;
+    d.style.borderLeftColor = colorOf(s.speaker);
+    if (!s.heading) { const w = document.createElement('div'); w.className = 'who'; w.style.color = colorOf(s.speaker); w.textContent = s.speaker; d.appendChild(w); }
+    const t = document.createElement('div'); t.textContent = s.text; d.appendChild(t);
+    d.onclick = () => run(i);
+    sc.appendChild(d);
+  });
+  $('castSec').hidden = $('playSec').hidden = false;
+  renderCast();
+  msg(`${label}: ${segs.length} segments, ${chars.filter(c => c.name !== 'Narrator').length} character(s) found.`);
+}
+const readFile = f => f.text().then(t => loadStory(t, f.name));
+$('drop').onclick = () => $('file').click();
+$('file').onchange = e => e.target.files[0] && readFile(e.target.files[0]);
+['dragover', 'dragenter'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); }));
+$('drop').addEventListener('drop', e => e.dataTransfer.files[0] && readFile(e.dataTransfer.files[0]));
+$('sampleBtn').onclick = () => loadStory(SAMPLE, 'Sample story');
+$('pasteBtn').onclick = () => { $('pasteBox').hidden = !$('pasteBox').hidden; };
+$('pasteGo').onclick = () => loadStory($('paste').value, 'Pasted text');
+
+/* ============ cast settings file ============ */
+$('saveCast').onclick = () => {
+  pinAll(); persist();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(saved, null, 2)], { type: 'application/json' }));
+  a.download = 'castwright-cast.json'; a.click(); URL.revokeObjectURL(a.href);
+};
+$('loadCast').onclick = () => $('castFile').click();
+$('castFile').onchange = async e => {
+  try { Object.assign(saved, JSON.parse(await e.target.files[0].text())); persist(); renderCast(); msg('Cast settings loaded.'); }
+  catch (err) { msg('Could not read that cast file.', true); }
+};
+$('resetCast').onclick = () => { saved = {}; persist(); renderCast(); msg('Cast reset to defaults.'); };
+window.addEventListener('beforeunload', () => synth && synth.cancel());
+</script>
+</body>
+</html>
