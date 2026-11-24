@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audio Capture Test</title>
+<style>
+  :root { --bg:#0b0f1a; --panel:#141a2b; --text:#e6ebf5; --muted:#8b95ad; --ok:#4ade80; --bad:#f87171; --warn:#fbbf24; --accent:#60a5fa; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.5 system-ui,sans-serif; padding:24px 16px; }
+  main { max-width:640px; margin:0 auto; }
+  h1 { font-size:1.4rem; margin:0 0 4px; }
+  p.sub { color:var(--muted); margin:0 0 20px; }
+  ol { padding-left:20px; color:var(--muted); }
+  ol b { color:var(--text); }
+  .card { background:var(--panel); border-radius:12px; padding:16px; margin:16px 0; }
+  button { background:var(--accent); color:#06101f; border:0; border-radius:8px; padding:10px 16px; font-size:1rem; font-weight:600; cursor:pointer; margin:0 8px 8px 0; }
+  button.secondary { background:#26304a; color:var(--text); }
+  button:disabled { opacity:.4; cursor:default; }
+  canvas { width:100%; height:90px; background:#0a0e18; border-radius:8px; display:block; }
+  .meter { height:12px; background:#0a0e18; border-radius:6px; overflow:hidden; margin-top:12px; }
+  .meter > div { height:100%; width:0; background:var(--ok); transition:width .08s; }
+  #verdict { font-size:1.1rem; font-weight:700; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  dl { margin:12px 0 0; display:grid; grid-template-columns:auto 1fr; gap:4px 12px; color:var(--muted); font-size:.9rem; }
+  dd { margin:0; color:var(--text); word-break:break-word; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Audio Capture Test</h1>
+  <p class="sub">Checks whether this page can hear your Audible playback.</p>
+
+  <ol>
+    <li>Open Audible's web player in another tab (audible.com &rarr; Library &rarr; Listen) and press play.</li>
+    <li>Come back here and click <b>Share tab audio</b>.</li>
+    <li>Pick the <b>Chrome Tab</b> with Audible and tick <b>Also share tab audio</b>.</li>
+  </ol>
+
+  <div class="card">
+    <button id="tabBtn">Share tab audio</button>
+    <button id="micBtn" class="secondary">Test microphone instead</button>
+    <button id="stopBtn" class="secondary" disabled>Stop</button>
+    <canvas id="wave" width="600" height="90"></canvas>
+    <div class="meter"><div id="bar"></div></div>
+  </div>
+
+  <div class="card">
+    <div id="verdict" class="warn">Waiting to start&hellip;</div>
+    <dl>
+      <dt>Source</dt><dd id="src">&ndash;</dd>
+      <dt>Audio track</dt><dd id="track">&ndash;</dd>
+      <dt>Peak level</dt><dd id="peak">&ndash;</dd>
+      <dt>Heard sound</dt><dd id="heard">&ndash;</dd>
+    </dl>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let stream, ctx, analyser, raf, peak = 0, heardFor = 0, startedAt = 0, mode = '';
+
+function setVerdict(text, cls) { const v = $('verdict'); v.textContent = text; v.className = cls; }
+
+async function start(kind) {
+  stop();
+  mode = kind;
+  try {
+    stream = kind === 'tab'
+      ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+      : await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    setVerdict('Cancelled or blocked: ' + e.name, 'bad');
+    return;
+  }
+  const vt = stream.getVideoTracks()[0];
+  $('src').textContent = kind === 'tab' ? (vt ? vt.label : 'tab') : 'Microphone';
+  // We only need the audio; stop video to save CPU.
+  stream.getVideoTracks().forEach(t => t.stop());
+
+  const at = stream.getAudioTracks()[0];
+  if (!at) {
+    $('track').textContent = 'None';
+    setVerdict('No audio track. Re-run and tick "Also share tab audio" (it must be a Chrome Tab, not a window).', 'bad');
+    stream = null;
+    return;
+  }
+  $('track').textContent = at.label || 'present';
+  at.addEventListener('ended', stop);
+
+  ctx = new AudioContext();
+  const srcNode = ctx.createMediaStreamSource(stream);
+  analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  srcNode.connect(analyser); // not connected to speakers, so no echo
+
+  peak = 0; heardFor = 0; startedAt = performance.now();
+  $('tabBtn').disabled = $('micBtn').disabled = true;
+  $('stopBtn').disabled = false;
+  setVerdict('Listening… make sure the audiobook is playing.', 'warn');
+  loop();
+}
+
+function loop() {
+  const buf = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(buf);
+  let sum = 0, p = 0;
+  for (const s of buf) { sum += s * s; p = Math.max(p, Math.abs(s)); }
+  const rms = Math.sqrt(sum / buf.length);
+  peak = Math.max(peak, p);
+  if (rms > 0.005) heardFor += 1;
+
+  $('bar').style.width = Math.min(100, rms * 400) + '%';
+  $('peak').textContent = peak.toFixed(3);
+  $('heard').textContent = heardFor > 0 ? 'Yes' : 'Not yet';
+
+  const c = $('wave'), g = c.getContext('2d');
+  g.clearRect(0, 0, c.width, c.height);
+  g.strokeStyle = '#60a5fa'; g.lineWidth = 2; g.beginPath();
+  for (let i = 0; i < buf.length; i++) {
+    const x = i / buf.length * c.width, y = c.height / 2 + buf[i] * c.height * 0.45;
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
+  }
+  g.stroke();
+
+  const elapsed = (performance.now() - startedAt) / 1000;
+  if (heardFor > 30) {
+    setVerdict(mode === 'tab'
+      ? '✅ Success: this page can hear the tab. Capture works.'
+      : '✅ Microphone works (use this as the fallback route).', 'ok');
+  } else if (elapsed > 8) {
+    setVerdict(mode === 'tab'
+      ? '❌ Connected but silent. If Audible is definitely playing, it is likely blocking capture (DRM). Try the microphone test next.'
+      : '❌ No sound from the microphone. Check which mic is selected and that audio is playing out loud.', 'bad');
+  }
+  raf = requestAnimationFrame(loop);
+}
+
+function stop() {
+  cancelAnimationFrame(raf);
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (ctx) ctx.close();
+  stream = ctx = null;
+  $('tabBtn').disabled = $('micBtn').disabled = false;
+  $('stopBtn').disabled = true;
+}
+
+$('tabBtn').onclick = () => start('tab');
+$('micBtn').onclick = () => start('mic');
+$('stopBtn').onclick = stop;
+</script>
+</body>
+</html>
