@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blob Pet</title>
+<style>
+  :root { --bg:#0b0f1a; --panel:#141a2b; --text:#e6ebf5; --muted:#8b95ad; --accent:#60a5fa; --line:#26304a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.5 system-ui,sans-serif; padding:16px; }
+  main { max-width:760px; margin:0 auto; }
+  h1 { font-size:1.3rem; margin:0 0 12px; }
+  #stage { position:relative; background:radial-gradient(ellipse at 50% 40%, #16203a, #0a0e18 70%); border-radius:16px; overflow:hidden; }
+  canvas { width:100%; height:auto; display:block; aspect-ratio:4/3; }
+  #nameTag { position:absolute; top:12px; left:16px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; font-size:.85rem; color:var(--muted); }
+  #caption { position:absolute; left:0; right:0; bottom:0; padding:14px 18px; min-height:64px; background:linear-gradient(transparent, rgba(5,8,15,.85)); font-size:1.05rem; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+  button, .chip { background:#26304a; color:var(--text); border:0; border-radius:999px; padding:8px 14px; font-size:.95rem; cursor:pointer; }
+  button.primary { background:var(--accent); color:#06101f; font-weight:700; }
+  .chip { border:2px solid transparent; }
+  .chip.active { border-color:currentColor; }
+  button:disabled { opacity:.4; cursor:default; }
+  details { background:var(--panel); border-radius:12px; padding:12px 16px; margin:12px 0; }
+  summary { cursor:pointer; font-weight:600; }
+  label { display:block; color:var(--muted); font-size:.85rem; margin:10px 0 4px; }
+  input, textarea { width:100%; background:#0a0e18; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; }
+  textarea { min-height:140px; resize:vertical; }
+  .vrow { display:flex; align-items:center; gap:8px; margin:8px 0; }
+  .vname { width:110px; font-weight:600; flex:none; }
+  select { flex:1; min-width:0; background:#0a0e18; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 8px; font:inherit; }
+  #status { color:var(--muted); font-size:.9rem; min-height:1.4em; }
+  #status.err { color:#f87171; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Blob Pet</h1>
+
+  <div id="stage">
+    <canvas id="cv" width="800" height="600"></canvas>
+    <div id="nameTag">Narrator</div>
+    <div id="caption"></div>
+  </div>
+
+  <div class="row" id="chips"></div>
+
+  <div class="row">
+    <button class="primary" id="demoBtn">&#9654; Play demo scene</button>
+    <button id="stopBtn" disabled>Stop</button>
+    <button id="micBtn">Use microphone (mouth follows real audio)</button>
+    <label class="chip" style="display:flex;align-items:center;gap:6px;margin:0;color:var(--text)"><input type="checkbox" id="voiceOn" checked style="width:auto"> Voices on</label>
+  </div>
+  <div id="status"></div>
+
+  <details open>
+    <summary>Voices (pick which browser voice each character uses; choices are remembered)</summary>
+    <div id="voicePanel"></div>
+  </details>
+
+  <details>
+    <summary>Cast a passage with Gemini</summary>
+    <label for="key">Gemini API key (stays in this browser only)</label>
+    <input id="key" type="password" autocomplete="off" placeholder="Paste key here">
+    <label for="model">Model</label>
+    <input id="model" value="gemini-flash-latest">
+    <label for="text">Passage (paste any text with dialogue; the sample is an invented scene)</label>
+    <textarea id="text">The airlock hissed open and Captain Vex stepped onto the dock, scanning the crowd. "You're late," she said. Mira looked up from her console, grinning. "The station's been scrambling your docking permit for an hour." From the shadows, old Tobb cleared his throat. "Permits are the least of your worries, Captain," he rumbled. "Someone has been asking about your cargo." A soft chime sounded, and the station AI added, "Warning. Unregistered vessel approaching dock four."</textarea>
+    <div class="row"><button class="primary" id="castBtn">Cast and play</button></div>
+  </details>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const cv = $('cv'), g = cv.getContext('2d');
+
+/* ---------- characters ---------- */
+const NARRATOR = { name:'Narrator', color:'#cbd5e1', lobes:3, spike:0.05, size:1, eyeSize:0.11, eyeSquash:1, mouthW:0.5, wobble:0.8 };
+const DEMO_CAST = {
+  'Captain Vex': { name:'Captain Vex', color:'#f97316', lobes:5, spike:0.16, size:1.05, eyeSize:0.09, eyeSquash:0.45, mouthW:0.55, wobble:1.2 },
+  'Mira':        { name:'Mira',        color:'#2dd4bf', lobes:2, spike:0.07, size:0.9,  eyeSize:0.15, eyeSquash:1,    mouthW:0.45, wobble:1.6 },
+  'Tobb':        { name:'Tobb',        color:'#a78bfa', lobes:3, spike:0.05, size:1.2,  eyeSize:0.1,  eyeSquash:0.35, mouthW:0.7,  wobble:0.5 },
+  'Station AI':  { name:'Station AI',  color:'#4ade80', lobes:8, spike:0.1,  size:0.95, eyeSize:0.12, eyeSquash:0.6,  mouthW:0.6,  wobble:2.2 },
+};
+const DEMO_LINES = [
+  ['Narrator', 'The airlock hissed open and Captain Vex stepped onto the dock.'],
+  ['Captain Vex', "You're late."],
+  ['Mira', "The station's been scrambling your docking permit for an hour."],
+  ['Tobb', 'Permits are the least of your worries, Captain. Someone has been asking about your cargo.'],
+  ['Station AI', 'Warning. Unregistered vessel approaching dock four.'],
+  ['Narrator', 'Vex turned toward the viewport and smiled.'],
+];
+let cast = { Narrator: NARRATOR, ...DEMO_CAST };
+
+/* ---------- blob state (current values ease toward the target) ---------- */
+const hex = h => [1,3,5].map(i => parseInt(h.slice(i, i + 2), 16));
+const HARM = [2,3,4,5,6,7,8];
+function targetOf(c) {
+  const amps = HARM.map(h => h === c.lobes ? c.spike : 0.015);
+  return { rgb: hex(c.color), amps, size:c.size, eyeSize:c.eyeSize, eyeSquash:c.eyeSquash, mouthW:c.mouthW, wobble:c.wobble };
+}
+let cur = targetOf(NARRATOR), tgt = cur, activeName = 'Narrator';
+const lerp = (a, b, k) => a + (b - a) * k;
+function ease(k) {
+  cur = {
+    rgb: cur.rgb.map((v, i) => lerp(v, tgt.rgb[i], k)),
+    amps: cur.amps.map((v, i) => lerp(v, tgt.amps[i], k)),
+    size: lerp(cur.size, tgt.size, k), eyeSize: lerp(cur.eyeSize, tgt.eyeSize, k),
+    eyeSquash: lerp(cur.eyeSquash, tgt.eyeSquash, k), mouthW: lerp(cur.mouthW, tgt.mouthW, k),
+    wobble: lerp(cur.wobble, tgt.wobble, k),
+  };
+}
+function setSpeaker(name) {
+  const c = cast[name] || cast.Narrator;
+  activeName = cast[name] ? name : 'Narrator';
+  tgt = targetOf(c);
+  const vo = typeof voiceFor === 'function' ? voiceFor(activeName) : null;
+  $('nameTag').textContent = activeName + (vo ? ' · voice: ' + vo.name : '');
+  $('nameTag').style.color = c.color;
+  document.querySelectorAll('.chip').forEach(el => el.classList.toggle('active', el.dataset.name === activeName));
+}
+
+/* ---------- mouth drive ---------- */
+let mouth = 0, mouthRaw = 0;
+let speaking = false, syllPhase = 0, syllAmp = 0.6;
+let micAnalyser = null, micBuf = null;
+
+function updateMouth(dt) {
+  if (micAnalyser) {
+    micAnalyser.getFloatTimeDomainData(micBuf);
+    let s = 0; for (const v of micBuf) s += v * v;
+    mouthRaw = Math.min(1, Math.sqrt(s / micBuf.length) * 9);
+  } else if (speaking) {
+    syllPhase += dt * (5 + Math.random() * 2.5);          // roughly 5-7 syllables per second
+    if (syllPhase > 1) { syllPhase -= 1; syllAmp = 0.35 + Math.random() * 0.65; }
+    mouthRaw = Math.pow(Math.sin(syllPhase * Math.PI), 1.3) * syllAmp;
+  } else mouthRaw = 0;
+  mouth = lerp(mouth, mouthRaw, 0.35);
+}
+
+/* ---------- drawing ---------- */
+let t = 0, last = performance.now(), blink = 0, nextBlink = 2;
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now; t += dt;
+  ease(1 - Math.pow(0.001, dt));                          // frame-rate independent easing
+  updateMouth(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+function draw() {
+  const W = cv.width, H = cv.height, cx = W / 2, cy = H * 0.5;
+  g.clearRect(0, 0, W, H);
+  const R = H * 0.27 * cur.size;
+  const squash = 1 - mouth * 0.06, stretch = 1 + mouth * 0.04;
+  const breath = 1 + Math.sin(t * 1.6) * 0.015;
+
+  // shadow
+  g.fillStyle = 'rgba(0,0,0,.35)';
+  g.beginPath(); g.ellipse(cx, cy + R * 1.05, R * 0.9, R * 0.12, 0, 0, Math.PI * 2); g.fill();
+
+  // body
+  const pts = 140;
+  g.beginPath();
+  for (let i = 0; i <= pts; i++) {
+    const a = i / pts * Math.PI * 2;
+    let r = 1;
+    HARM.forEach((h, k) => { r += cur.amps[k] * Math.sin(h * a + t * cur.wobble * (0.5 + h * 0.12) + k * 1.7); });
+    r *= R * breath;
+    const x = cx + Math.cos(a) * r * stretch, y = cy + Math.sin(a) * r * squash;
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
+  }
+  g.closePath();
+  const [cr, cg, cb] = cur.rgb.map(Math.round);
+  const grad = g.createRadialGradient(cx - R * 0.3, cy - R * 0.4, R * 0.1, cx, cy, R * 1.3);
+  grad.addColorStop(0, `rgb(${Math.min(255, cr + 70)},${Math.min(255, cg + 70)},${Math.min(255, cb + 70)})`);
+  grad.addColorStop(1, `rgb(${cr},${cg},${cb})`);
+  g.fillStyle = grad; g.fill();
+  g.lineWidth = 3; g.strokeStyle = `rgba(${cr},${cg},${cb},.6)`; g.stroke();
+
+  // eyes
+  blink = Math.max(0, blink - 0.12);
+  nextBlink -= 1 / 60;
+  if (nextBlink < 0) { blink = 1; nextBlink = 1.5 + Math.random() * 3; }
+  const ex = R * 0.36, ey = cy - R * 0.18, es = R * cur.eyeSize * 1.6;
+  const eh = es * cur.eyeSquash * (1 - blink * 0.92);
+  [-1, 1].forEach(s => {
+    g.fillStyle = '#fff'; g.beginPath(); g.ellipse(cx + s * ex, ey, es, Math.max(1.5, eh), 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#111827'; g.beginPath(); g.ellipse(cx + s * ex + es * 0.15, ey, es * 0.45, Math.max(1.2, eh * 0.55), 0, 0, Math.PI * 2); g.fill();
+  });
+
+  // mouth: the visualizer part
+  const mw = R * cur.mouthW * (0.8 + mouth * 0.25), mh = 3 + mouth * R * 0.34;
+  const my = cy + R * 0.28;
+  g.fillStyle = '#1b0f1f';
+  g.beginPath(); g.ellipse(cx, my, mw, mh, 0, 0, Math.PI * 2); g.fill();
+  if (mouth > 0.25) { // tongue
+    g.fillStyle = 'rgba(244,114,182,.75)';
+    g.beginPath(); g.ellipse(cx, my + mh * 0.45, mw * 0.5, mh * 0.4, 0, 0, Math.PI * 2); g.fill();
+  }
+}
+
+/* ---------- line playback ---------- */
+let playToken = 0;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function playLines(lines) {
+  const token = ++playToken;
+  $('stopBtn').disabled = false;
+  for (const [who, text] of lines) {
+    if (token !== playToken) return;
+    setSpeaker(who);
+    $('caption').textContent = text;
+    await sleep(350);                                   // time to morph
+    speaking = true;
+    const words = text.trim().split(/\s+/).length;
+    const est = Math.max(1200, words / 2.6 * 1000);
+    if (voicesOn()) await speak(who, text, est, token); else await sleep(est);
+    speaking = false;
+    await sleep(250);
+  }
+  if (token === playToken) stopPlay();
+}
+/* ---------- text-to-speech (browser voices) ---------- */
+const synth = window.speechSynthesis;
+let voices = [];
+function loadVoices() {
+  const all = synth ? synth.getVoices() : [];
+  const en = all.filter(v => /^en/i.test(v.lang));
+  voices = en.length ? en : all;
+  refreshVoices();
+}
+
+// Each character keeps the same voice across reloads: a saved pick wins, otherwise a stable
+// pick derived from the character's name (the browser's own voice order is not stable).
+let picks = {}; try { picks = JSON.parse(localStorage.getItem('voicePicks') || '{}'); } catch (e) {}
+let voiceMap = new Map();
+const vKey = v => v.voiceURI || v.name;
+const vLabel = v => `${v.name}${v.localService ? '' : ' (online)'} [${v.lang}]`;
+const hashStr = s => { let h = 0; for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h; };
+function assignVoices() {
+  voiceMap = new Map();
+  if (!voices.length) return;
+  const sorted = [...voices].sort((a, b) => vKey(a).localeCompare(vKey(b)));
+  const used = new Set(), names = Object.keys(cast);
+  names.forEach(n => { const p = sorted.find(v => vKey(v) === picks[n]); if (p) { voiceMap.set(n, p); used.add(vKey(p)); } });
+  names.filter(n => !voiceMap.has(n)).sort().forEach(n => {
+    let i = hashStr(n) % sorted.length, tries = 0;
+    while (used.has(vKey(sorted[i])) && tries++ < sorted.length) i = (i + 1) % sorted.length;
+    voiceMap.set(n, sorted[i]); used.add(vKey(sorted[i]));
+  });
+}
+function voiceFor(name) { return voiceMap.get(name) || null; }
+function refreshVoices() { assignVoices(); renderVoicePanel(); setSpeaker(activeName); }
+
+function renderVoicePanel() {
+  const box = $('voicePanel');
+  if (!synth || !voices.length) { box.textContent = synth ? 'No voices found yet. Try reloading the page.' : 'This browser has no speech synthesis.'; return; }
+  const sorted = [...voices].sort((a, b) => vLabel(a).localeCompare(vLabel(b)));
+  box.innerHTML = '';
+  Object.keys(cast).forEach(name => {
+    const row = document.createElement('div'); row.className = 'vrow';
+    const lab = document.createElement('span'); lab.textContent = name; lab.style.color = cast[name].color; lab.className = 'vname';
+    const sel = document.createElement('select');
+    sorted.forEach(v => { const o = document.createElement('option'); o.value = vKey(v); o.textContent = vLabel(v); sel.appendChild(o); });
+    const cur = voiceFor(name); if (cur) sel.value = vKey(cur);
+    sel.onchange = () => {
+      Object.keys(cast).forEach(n => { const v = voiceFor(n); if (v && !picks[n]) picks[n] = vKey(v); });  // pin the others so they don't shuffle
+      picks[name] = sel.value; try { localStorage.setItem('voicePicks', JSON.stringify(picks)); } catch (e) {}
+      assignVoices(); setSpeaker(activeName);
+    };
+    const test = document.createElement('button'); test.textContent = 'Test';
+    test.onclick = () => { stopPlay(); speak(name, `Hi, I'm ${name}.`, 2000, playToken); };
+    row.append(lab, sel, test); box.appendChild(row);
+  });
+}
+if (synth) { loadVoices(); synth.onvoiceschanged = loadVoices; }
+function voicesOn() { return !!synth && $('voiceOn').checked; }
+function speak(who, text, estMs, token) {
+  return new Promise(resolve => {
+    const c = cast[who] || cast.Narrator;
+    const u = new SpeechSynthesisUtterance(text);
+    const v = voiceFor(cast[who] ? who : 'Narrator');
+    if (v) u.voice = v;
+    u.pitch = Math.min(1.8, Math.max(0.5, 1 + (1.05 - c.size) * 1.6));   // bigger blob = deeper voice
+    u.rate = Math.min(1.25, Math.max(0.8, 0.85 + c.wobble * 0.12));      // jumpier blob = faster talker
+    u.volume = 1;
+    let done = false;
+    const finish = () => { if (!done) { done = true; clearTimeout(guard); resolve(); } };
+    u.onend = finish; u.onerror = finish;
+    u.onboundary = () => { syllPhase = 0; syllAmp = 0.5 + Math.random() * 0.5; };   // pulse the mouth on each word when the voice reports them
+    const guard = setTimeout(() => { synth.cancel(); finish(); }, estMs * 3 + 4000);  // never hang if a voice stalls
+    if (token !== playToken) return finish();
+    synth.speak(u);
+  });
+}
+
+function stopPlay() {
+  if (synth) synth.cancel();
+  playToken++; speaking = false;
+  $('stopBtn').disabled = true;
+  $('caption').textContent = '';
+  setSpeaker('Narrator');
+}
+
+/* ---------- chips ---------- */
+function buildChips() {
+  const box = $('chips'); box.innerHTML = '';
+  Object.values(cast).forEach(c => {
+    const el = document.createElement('button');
+    el.className = 'chip'; el.dataset.name = c.name; el.textContent = c.name; el.style.color = c.color;
+    el.onclick = () => {
+      stopPlay(); setSpeaker(c.name);
+      if (voicesOn()) {            // click a chip to hear that character's voice
+        const tok = playToken; $('caption').textContent = `Hi, I'm ${c.name}.`;
+        speaking = true; speak(c.name, `Hi, I'm ${c.name}.`, 2000, tok).then(() => { if (tok === playToken) speaking = false; });
+      }
+    };
+    box.appendChild(el);
+  });
+  refreshVoices();
+}
+
+/* ---------- microphone ---------- */
+let micStream = null, micCtx = null;
+$('micBtn').onclick = async () => {
+  if (micAnalyser) {
+    micStream.getTracks().forEach(t => t.stop()); micCtx.close();
+    micAnalyser = null; $('micBtn').textContent = 'Use microphone (mouth follows real audio)'; status('Mic off.'); return;
+  }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio:true });
+    micCtx = new AudioContext();
+    micAnalyser = micCtx.createAnalyser(); micAnalyser.fftSize = 1024;
+    micCtx.createMediaStreamSource(micStream).connect(micAnalyser);
+    micBuf = new Float32Array(micAnalyser.fftSize);
+    $('micBtn').textContent = 'Stop microphone';
+    status('Mic on: the mouth follows what the mic hears. Pick a character chip to choose who is "speaking".');
+  } catch (e) { status('Mic blocked: ' + e.name, true); }
+};
+
+/* ---------- Gemini casting ---------- */
+function status(msg, err) { const s = $('status'); s.textContent = msg; s.className = err ? 'err' : ''; }
+try { $('key').value = localStorage.getItem('gemini_key') || ''; $('model').value = localStorage.getItem('gemini_model') || $('model').value; } catch (e) {}
+
+const PROMPT = passage => `You are a scene director for an audiobook companion. Split the passage below into consecutive segments in reading order.
+- Dialogue (the quoted words only) is attributed to the speaking character by name.
+- Everything else (narration, attribution like "she said") is attributed to "Narrator".
+- Keep each segment's text verbatim from the passage. Do not invent lines.
+- For every non-Narrator character, invent a distinctive blob look.
+Return JSON: {"characters":[{"name":string,"color":"#rrggbb","lobes":integer 2-8,"spike":number 0.03-0.2,"size":number 0.8-1.3,"eyeSize":number 0.07-0.16,"eyeSquash":number 0.3-1,"mouthW":number 0.4-0.75,"wobble":number 0.4-2.4}],"lines":[{"speaker":string,"text":string}]}
+Lower spike with more lobes looks smoother; a high spike with few lobes looks angular or aggressive. Pick personality-appropriate looks.
+
+PASSAGE:
+${passage}`;
+
+$('castBtn').onclick = async () => {
+  const key = $('key').value.trim(), model = $('model').value.trim(), passage = $('text').value.trim();
+  if (!key) return status('Paste your Gemini API key first.', true);
+  if (!passage) return status('Add a passage.', true);
+  try { localStorage.setItem('gemini_key', key); localStorage.setItem('gemini_model', model); } catch (e) {}
+  status('Asking Gemini to cast the scene...'); $('castBtn').disabled = true;
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'x-goog-api-key':key },
+      body: JSON.stringify({ contents:[{ parts:[{ text: PROMPT(passage) }] }], generationConfig:{ responseMimeType:'application/json', temperature:0.7 } }),
+    });
+    if (!res.ok) throw new Error(`Gemini returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const data = await res.json();
+    const out = JSON.parse(data.candidates[0].content.parts[0].text);
+    const clamp = (v, a, b, d) => Number.isFinite(+v) ? Math.min(b, Math.max(a, +v)) : d;
+    cast = { Narrator: NARRATOR };
+    (out.characters || []).forEach(c => {
+      if (!c.name || c.name === 'Narrator') return;
+      cast[c.name] = {
+        name:c.name, color: /^#[0-9a-f]{6}$/i.test(c.color) ? c.color : '#94a3b8',
+        lobes: Math.round(clamp(c.lobes, 2, 8, 3)), spike: clamp(c.spike, 0.03, 0.2, 0.08), size: clamp(c.size, 0.8, 1.3, 1),
+        eyeSize: clamp(c.eyeSize, 0.07, 0.16, 0.11), eyeSquash: clamp(c.eyeSquash, 0.3, 1, 1),
+        mouthW: clamp(c.mouthW, 0.4, 0.75, 0.55), wobble: clamp(c.wobble, 0.4, 2.4, 1),
+      };
+    });
+    const lines = (out.lines || []).filter(l => l.text).map(l => [l.speaker || 'Narrator', l.text]);
+    if (!lines.length) throw new Error('Gemini returned no lines.');
+    buildChips();
+    status(`Cast ${Object.keys(cast).length - 1} character(s), ${lines.length} segments. Playing.`);
+    playLines(lines);
+  } catch (e) { status('Casting failed: ' + e.message, true); }
+  $('castBtn').disabled = false;
+};
+
+/* ---------- wiring ---------- */
+$('demoBtn').onclick = () => { cast = { Narrator: NARRATOR, ...DEMO_CAST }; buildChips(); status(''); playLines(DEMO_LINES); };
+$('stopBtn').onclick = stopPlay;
+buildChips();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
