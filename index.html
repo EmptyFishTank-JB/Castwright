@@ -47,7 +47,7 @@
 <body>
 <main>
   <h1>Castwright</h1>
-  <p class="tag">Give every character in a story their own voice. <span style="opacity:.6">v1.0.1</span></p>
+  <p class="tag">Give every character in a story their own voice. <span style="opacity:.6">v1.1.0</span></p>
 
   <section>
     <h2>Story</h2>
@@ -72,6 +72,15 @@
 
   <section id="castSec" hidden>
     <h2>Dramatis Personae</h2>
+    <div class="row" style="margin-bottom:12px;color:var(--muted);font-size:.85rem">
+      <label>Accent filter <select id="accent" style="width:auto"><option value="all">All accents</option></select></label>
+      <label><input type="checkbox" id="notesOn" checked> Apply delivery notes, like (quietly)</label>
+    </div>
+    <details style="margin-bottom:12px">
+      <summary>Pronunciation fixes</summary>
+      <p style="color:var(--muted);font-size:.85rem;margin:8px 0 0">One per line, written as <code>word=how it should sound</code>. Whole words only, not case sensitive. Only the spoken sound changes; the text on screen stays the same.</p>
+      <textarea id="pron" placeholder="Vex=Vecks&#10;Lave=Layve"></textarea>
+    </details>
     <div id="cast" class="cast"></div>
     <div class="row" style="margin-top:12px">
       <button id="saveCast">Save cast settings (.json)</button>
@@ -123,9 +132,9 @@ A soft chime sounded across the dock.
 
 Vex turned toward the viewport and smiled. Whatever was coming, she had been waiting for it.
 
-**Captain Vex:** Mira, open a channel.
+**Captain Vex (shouting):** Mira, open a channel!
 
-**Mira:** Channel open. They're not answering.
+**Mira (nervously):** Channel open. They're not answering.
 `;
 
 /* ============ parsing ============ */
@@ -152,8 +161,9 @@ function parse(md) {
     const m = line.match(/^(\*\*|__)?\s*([^:*_]{1,40}?)\s*(\*\*|__)?\s*:\s*(\*\*|__)?\s*(\S.*)$/);
     if (m) {
       const name = m[2].replace(/\s*\([^)]*\)\s*$/, '').trim();
+      const note = ((m[2].match(/\(([^)]*)\)\s*$/) || [])[1] || '').trim();   // e.g. "quietly" from "Tobb (quietly)"
       if (name && /^[A-Za-z]/.test(name) && name.split(/\s+/).length <= 4 && !/[.!?,;]$/.test(name) && !m[5].startsWith('//'))
-        cand = { name, bold: !!(m[1] || m[3] || m[4]), text: m[5] };
+        cand = { name, bold: !!(m[1] || m[3] || m[4]), text: m[5], note };
     }
     raw.push({ line, cand });
   }
@@ -164,8 +174,9 @@ function parse(md) {
   const display = {}; const segs = [];
   raw.forEach(r => {
     if (r.heading) { if (r.text) segs.push({ speaker: 'Narrator', text: r.text, heading: true }); return; }
-    let speaker = 'Narrator', text = r.line;
+    let speaker = 'Narrator', text = r.line, note = '';
     if (r.cand && isSpeaker(r.cand)) {
+      note = r.cand.note;
       const k = r.cand.name.toLowerCase();
       if (!NARRATOR_KEYS.has(k)) {
         display[k] = display[k] || (/[a-z]/.test(r.cand.name) ? r.cand.name : titleCase(r.cand.name));
@@ -174,9 +185,39 @@ function parse(md) {
       text = r.cand.text;
     }
     text = unquote(stripMd(text));
-    if (text) segs.push({ speaker, text });
+    if (text) segs.push({ speaker, text, note });
   });
   return segs;
+}
+
+/* ============ delivery notes: "(quietly)" etc. nudge pitch / rate / volume for that line ============ */
+const DELIVERY = [
+  [/whisper|quiet|soft|murmur|hush|low voice/, { v: 0.45, p: 0.95, r: 0.9 }],
+  [/shout|yell|scream|bark|roar|bellow/,       { v: 1.5,  p: 1.15, r: 1.1 }],
+  [/slow|drawl|reluctant|hesitant/,            { v: 1,    p: 1,    r: 0.8 }],
+  [/fast|quick|rush|hurr|panic|breathless/,    { v: 1,    p: 1.05, r: 1.25 }],
+  [/angry|furious|cold|curt|grim|stern/,       { v: 1,    p: 0.9,  r: 1.05 }],
+  [/nervous|afraid|scared|tremb|anxious/,      { v: 0.9,  p: 1.12, r: 1.1 }],
+  [/sad|sorrow|tired|weary|grief|mournful/,    { v: 0.85, p: 0.9,  r: 0.85 }],
+  [/excited|cheerful|happy|delight|gleeful/,   { v: 1,    p: 1.12, r: 1.1 }],
+];
+function delivery(note) {
+  const d = { v: 1, p: 1, r: 1 };
+  if (!note || !$('notesOn').checked) return d;
+  const n = note.toLowerCase();
+  DELIVERY.forEach(([re, e]) => { if (re.test(n)) { d.v *= e.v; d.p *= e.p; d.r *= e.r; } });
+  return d;
+}
+
+/* ============ pronunciation fixes: one "word=how it sounds" per line ============ */
+let pron = ''; try { pron = localStorage.getItem('castwrightPron') || ''; } catch (e) {}
+function applyPron(t) {
+  pron.split('\n').forEach(l => {
+    const i = l.indexOf('='); if (i < 1) return;
+    const a = l.slice(0, i).trim(), b = l.slice(i + 1).trim(); if (!a) return;
+    t = t.replace(new RegExp('\\b' + a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'), () => b);
+  });
+  return t;
 }
 
 /* ============ cast & voices ============ */
@@ -189,18 +230,31 @@ const vLabel = v => `${v.name}${/natural|neural/i.test(v.name) ? '' : v.localSer
 const hashStr = s => { let h = 0; for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h; };
 const colorOf = n => n === 'Narrator' ? '#cbd5e1' : `hsl(${hashStr(n) % 360} 70% 66%)`;
 
+const normLang = v => v.lang.replace('_', '-');
+function langName(code) {
+  try { const [l, r] = code.split('-'); const L = new Intl.DisplayNames(['en'], { type: 'language' }).of(l); return r ? `${L} (${new Intl.DisplayNames(['en'], { type: 'region' }).of(r.toUpperCase())})` : L; }
+  catch (e) { return code; }
+}
+function fillAccents() {
+  const sel = $('accent'), keep = sel.value || 'all';
+  sel.innerHTML = '<option value="all">All accents</option>';
+  [...new Set(voices.map(normLang))].sort().forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = langName(c); sel.appendChild(o); });
+  sel.value = [...sel.options].some(o => o.value === keep) ? keep : 'all';
+}
 function loadVoices() {
   const all = synth ? synth.getVoices() : [];
   const en = all.filter(v => /^en/i.test(v.lang));
   voices = (en.length ? en : all).slice().sort((a, b) => vRank(a) - vRank(b) || a.name.localeCompare(b.name));
+  fillAccents();
   if (chars.length) renderCast();
 }
 if (synth) { loadVoices(); synth.onvoiceschanged = loadVoices; }
 
 function defaults(name) {
   const h = hashStr(name);
-  return name === 'Narrator' ? { pitch: 1, rate: 1, volume: 1 }
-    : { pitch: +(0.75 + (h % 11) * 0.065).toFixed(2), rate: +(0.95 + ((h >> 4) % 6) * 0.03).toFixed(2), volume: 1 };
+  const base = { pauseBefore: 0, pauseAfter: 250, sentencePause: 0 };
+  return name === 'Narrator' ? { pitch: 1, rate: 1, volume: 1, ...base }
+    : { pitch: +(0.75 + (h % 11) * 0.065).toFixed(2), rate: +(0.95 + ((h >> 4) % 6) * 0.03).toFixed(2), volume: 1, ...base };
 }
 // stable default voice per name (hash into the sorted list, avoiding voices already taken)
 function assignVoices() {
@@ -233,18 +287,25 @@ function renderCast() {
         <label>Pitch <b class="pv"></b><input class="pitch" type="range" min="0.5" max="1.8" step="0.05"></label>
         <label>Rate <b class="rv"></b><input class="rate" type="range" min="0.6" max="1.5" step="0.05"></label>
         <label>Volume <b class="vv"></b><input class="vol" type="range" min="0.2" max="1" step="0.05"></label>
+        <label>Pause before lines <b class="bv"></b><input class="pb" type="range" min="0" max="2000" step="50"></label>
+        <label>Pause after lines <b class="av"></b><input class="pa" type="range" min="0" max="2000" step="50"></label>
+        <label>Pause between sentences <b class="sv"></b><input class="sp" type="range" min="0" max="1000" step="50"></label>
       </div>`;
     el.querySelector('.cname').textContent = c.name;
     const sel = el.querySelector('select');
     if (!voices.length) { sel.innerHTML = '<option>No voices available</option>'; sel.disabled = true; }
-    voices.forEach(v => { const o = document.createElement('option'); o.value = vKey(v); o.textContent = vLabel(v); sel.appendChild(o); });
-    if (voiceMap[c.name]) sel.value = vKey(voiceMap[c.name]);
+    const acc = $('accent').value, curV = voiceMap[c.name];
+    voices.filter(v => acc === 'all' || normLang(v) === acc || v === curV)     // the current voice always stays listed
+      .forEach(v => { const o = document.createElement('option'); o.value = vKey(v); o.textContent = vLabel(v); sel.appendChild(o); });
+    if (curV) sel.value = vKey(curV);
     const bind = (cls, outCls, key, fmt) => {
       const inp = el.querySelector(cls), out = el.querySelector(outCls);
       inp.value = s[key]; out.textContent = fmt(s[key]);
       inp.oninput = () => { out.textContent = fmt(+inp.value); pinAll(); saved[c.name][key] = +inp.value; persist(); };
     };
     bind('.pitch', '.pv', 'pitch', v => (+v).toFixed(2)); bind('.rate', '.rv', 'rate', v => (+v).toFixed(2) + 'x'); bind('.vol', '.vv', 'volume', v => Math.round(v * 100) + '%');
+    const ms = v => v + ' ms';
+    bind('.pb', '.bv', 'pauseBefore', ms); bind('.pa', '.av', 'pauseAfter', ms); bind('.sp', '.sv', 'sentencePause', ms);
     sel.onchange = () => { pinAll(); saved[c.name].voice = sel.value; persist(); voiceMap = assignVoices(); };
     el.querySelector('.test').onclick = () => { stop(); testVoice(c.name); };
     box.appendChild(el);
@@ -262,19 +323,28 @@ function chunks(text) {   // sentence-sized pieces; long utterances get cut off 
   if (buf.trim()) out.push(buf.trim());
   return out;
 }
-function say(name, text, tok) {
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+function say(name, text, tok, d) {
   return new Promise(resolve => {
     if (tok !== token) return resolve();
     const s = cfg(name), u = new SpeechSynthesisUtterance(text);
     if (voiceMap[name]) u.voice = voiceMap[name];
-    u.pitch = s.pitch; u.rate = Math.min(2, s.rate * speed()); u.volume = s.volume;
+    u.pitch = clamp(s.pitch * d.p, 0.3, 2); u.rate = clamp(s.rate * d.r * speed(), 0.5, 2); u.volume = clamp(s.volume * d.v, 0.05, 1);
     let done = false; const fin = () => { if (!done) { done = true; clearTimeout(g); resolve(); } };
     u.onend = fin; u.onerror = fin;
     const g = setTimeout(() => { synth.cancel(); fin(); }, text.length * 160 + 6000);   // never hang on a stalled voice
     synth.speak(u);
   });
 }
-async function speakText(name, text, tok) { for (const c of chunks(text)) { if (tok !== token) return; await say(name, c, tok); } }
+async function speakText(name, text, tok, note = '') {
+  const d = delivery(note), gap = cfg(name).sentencePause / speed();
+  const parts = chunks(applyPron(text));
+  for (let i = 0; i < parts.length; i++) {
+    if (tok !== token) return;
+    await say(name, parts[i], tok, d);
+    if (gap > 0 && i < parts.length - 1) await sleep(gap);
+  }
+}
 function testVoice(name) { const tok = ++token; speakText(name, `Hi, I'm ${name}. This is how I sound.`, tok); }
 
 function setNow(i) {
@@ -290,9 +360,11 @@ async function run(from) {
   for (let i = from; i < segs.length; i++) {
     if (tok !== token) return;
     cur = i; setNow(i);
-    await speakText(segs[i].speaker, segs[i].text, tok);
+    const c = cfg(segs[i].speaker);
+    if (c.pauseBefore > 0) { await sleep(c.pauseBefore / speed()); if (tok !== token) return; }
+    await speakText(segs[i].speaker, segs[i].text, tok, segs[i].note);
     if (tok !== token) return;
-    await sleep(segs[i].heading ? 600 : 250);
+    await sleep((segs[i].heading ? 600 : c.pauseAfter) / speed());
   }
   if (tok === token) { setPlaying(false); cur = 0; setNow(-1); }
 }
@@ -317,7 +389,7 @@ function loadStory(text, label) {
   segs.forEach((s, i) => {
     const d = document.createElement('div'); d.className = 'seg' + (s.heading ? ' head' : ''); d.dataset.i = i;
     d.style.borderLeftColor = colorOf(s.speaker);
-    if (!s.heading) { const w = document.createElement('div'); w.className = 'who'; w.style.color = colorOf(s.speaker); w.textContent = s.speaker; d.appendChild(w); }
+    if (!s.heading) { const w = document.createElement('div'); w.className = 'who'; w.style.color = colorOf(s.speaker); w.textContent = s.speaker + (s.note ? ` (${s.note})` : ''); d.appendChild(w); }
     const t = document.createElement('div'); t.textContent = s.text; d.appendChild(t);
     d.onclick = () => run(i);
     sc.appendChild(d);
@@ -340,14 +412,21 @@ $('pasteGo').onclick = () => loadStory($('paste').value, 'Pasted text');
 $('saveCast').onclick = () => {
   pinAll(); persist();
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(saved, null, 2)], { type: 'application/json' }));
+  a.href = URL.createObjectURL(new Blob([JSON.stringify({ ...saved, __pronunciations: pron }, null, 2)], { type: 'application/json' }));
   a.download = 'castwright-cast.json'; a.click(); URL.revokeObjectURL(a.href);
 };
 $('loadCast').onclick = () => $('castFile').click();
 $('castFile').onchange = async e => {
-  try { Object.assign(saved, JSON.parse(await e.target.files[0].text())); persist(); renderCast(); msg('Cast settings loaded.'); }
-  catch (err) { msg('Could not read that cast file.', true); }
+  try {
+    const data = JSON.parse(await e.target.files[0].text());
+    if (typeof data.__pronunciations === 'string') { pron = data.__pronunciations; $('pron').value = pron; try { localStorage.setItem('castwrightPron', pron); } catch (x) {} }
+    delete data.__pronunciations;
+    Object.assign(saved, data); persist(); renderCast(); msg('Cast settings loaded.');
+  } catch (err) { msg('Could not read that cast file.', true); }
 };
+$('pron').value = pron;
+$('pron').oninput = () => { pron = $('pron').value; try { localStorage.setItem('castwrightPron', pron); } catch (e) {} };
+$('accent').onchange = () => renderCast();
 $('resetCast').onclick = () => { saved = {}; persist(); renderCast(); msg('Cast reset to defaults.'); };
 window.addEventListener('beforeunload', () => synth && synth.cancel());
 </script>

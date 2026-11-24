@@ -22,6 +22,6 @@ A soft chime sounded across the dock.
 
 Vex turned toward the viewport and smiled. Whatever was coming, she had been waiting for it.
 
-**Captain Vex:** Mira, open a channel.
+**Captain Vex (shouting):** Mira, open a channel!
 
-**Mira:** Channel open. They're not answering.
+**Mira (nervously):** Channel open. They're not answering.
